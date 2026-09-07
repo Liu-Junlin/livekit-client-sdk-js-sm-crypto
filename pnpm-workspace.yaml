@@ -8,3 +8,6 @@ overrides:
 minimumReleaseAge: 2880
 minimumReleaseAgeExclude:
   - '@livekit/*'
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true

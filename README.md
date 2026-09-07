@@ -1,6 +1,6 @@
 # livekit-client-sm4
 
-本仓库是官方 [livekit/client-sdk-js](https://github.com/livekit/client-sdk-js)（v2.22.2）的 fork，在保持官方默认行为不变的前提下，为 e2ee 模块新增了**国密（SM2/SM3/SM4）加密支持**。
+本仓库是官方 [livekit/client-sdk-js](https://github.com/livekit/client-sdk-js)（v2.22.3）的 fork，在保持官方默认行为不变的前提下，为 e2ee 模块新增了**国密（SM2/SM3/SM4）加密支持**。
 
 > **官方文档 / 原仓库：** [https://github.com/livekit/client-sdk-js](https://github.com/livekit/client-sdk-js)
 >
@@ -90,7 +90,7 @@ await room.setE2EEEnabled(true)
 
 国密（SM2/SM3/SM4）实现细节、密钥派生参数、二次派生 vs 直接注入、安全与性能、SM2 分发、Rust/WebRTC native 加 SM4 可行性、Egress/Agent 改造评估等，均记录于本仓库：**`E2EE_SM_UPGRADE_PLAN.md`（§1–§18）**。详见：
 
-- [`E2EE_SM_UPGRADE_PLAN.md`](./E2EE_SM_UPGRADE_PLAN.md)
+- [`E2EE_SM_UPGRADE_PLAN.md`](https://github.com/Liu-Junlin/livekit-sdk-js-sm4/blob/main/E2EE_SM_UPGRADE_PLAN.md)
 
 ---
 
