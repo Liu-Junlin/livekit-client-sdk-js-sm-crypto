@@ -1,5 +1,11 @@
 # Change Log
 
+## 2.22.3
+
+### Patch Changes
+
+- Support simulcast for svc codecs (vp9/av1) - [#2083](https://github.com/livekit/client-sdk-js/pull/2083) ([@cnderrauber](https://github.com/cnderrauber))
+
 ## 2.22.2
 
 ### Patch Changes
