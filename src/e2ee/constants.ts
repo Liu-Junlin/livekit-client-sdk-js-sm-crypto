@@ -2,6 +2,12 @@ import type { KeyProviderOptions } from './types';
 
 export const ENCRYPTION_ALGORITHM = 'AES-GCM';
 
+/**
+ * 国密 SM4-GCM 算法名。媒体帧 / 数据消息在 `cryptography: 'sm4'` 时使用
+ * `src/e2ee/sm/smCrypto.ts` 提供的 SM4-GCM 加解密（AEAD，自带 16 字节认证 tag）。
+ */
+export const SM4_ENCRYPTION_ALGORITHM = 'SM4-GCM';
+
 // How many consecutive frames can fail decrypting before a particular key gets marked as invalid
 export const DECRYPTION_FAILURE_TOLERANCE = 10;
 
@@ -44,6 +50,7 @@ export const KEY_PROVIDER_DEFAULTS: KeyProviderOptions = {
   failureTolerance: DECRYPTION_FAILURE_TOLERANCE,
   keyringSize: 16,
   keySize: 128,
+  cryptography: 'aes-gcm',
 } as const;
 
 export const MAX_SIF_COUNT = 100;

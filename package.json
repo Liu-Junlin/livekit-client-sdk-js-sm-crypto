@@ -1,5 +1,5 @@
 {
-  "name": "livekit-client",
+  "name": "livekit-client-sdk-js-sm-crypto",
   "version": "2.22.3",
   "description": "JavaScript/TypeScript client SDK for LiveKit",
   "main": "./dist/livekit-client.umd.js",
@@ -79,6 +79,7 @@
     "loglevel": "^1.9.2",
     "machina": "^7.0.0",
     "sdp-transform": "^2.15.0",
+    "sm-crypto-v3": "^1.0.6",
     "tslib": "2.8.1",
     "typed-emitter": "^2.1.0",
     "webrtc-adapter": "9.0.6"
@@ -142,5 +143,5 @@
     "vite": "8.1.5",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@10.34.5"
+  "packageManager": "pnpm@12.3.4"
 }

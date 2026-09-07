@@ -3,8 +3,9 @@ import { workerLogger } from '../../logger';
 import type { NonSharedUint8Array } from '../../type-polyfills/non-shared-typed-arrays';
 import { ENCRYPTION_ALGORITHM } from '../constants';
 import { CryptorError, CryptorErrorReason } from '../errors';
+import { SM4_TAG_LENGTH, sm4GcmDecrypt, sm4GcmEncrypt } from '../sm/smCrypto';
 import type { DecodeRatchetOptions, KeySet, RatchetResult } from '../types';
-import { deriveKeys } from '../utils';
+import { asCryptoKey, deriveKeys, isSm4 } from '../utils';
 import type { ParticipantKeyHandler } from './ParticipantKeyHandler';
 
 export class DataCryptor {
@@ -36,12 +37,26 @@ export class DataCryptor {
       throw new Error('No key set found');
     }
 
+    const { encryptionKey } = keySet;
+    if (isSm4(keys.keyProviderOptions.cryptography) && encryptionKey instanceof Uint8Array) {
+      const { cipher, tag } = sm4GcmEncrypt(new Uint8Array(data), encryptionKey, new Uint8Array(iv));
+      // 与 AES-GCM 对齐：payload = cipher ‖ tag（tag 恒 16B）
+      const payload = new Uint8Array(cipher.byteLength + tag.byteLength);
+      payload.set(cipher, 0);
+      payload.set(tag, cipher.byteLength);
+      return {
+        payload,
+        iv: new Uint8Array(iv),
+        keyIndex: keys.getCurrentKeyIndex(),
+      };
+    }
+
     const cipherText = await crypto.subtle.encrypt(
       {
         name: ENCRYPTION_ALGORITHM,
         iv,
       },
-      keySet.encryptionKey,
+      asCryptoKey(encryptionKey),
       new Uint8Array(data),
     );
 
@@ -68,12 +83,23 @@ export class DataCryptor {
     }
 
     try {
+      const { encryptionKey } = keySet;
+      if (isSm4(keys.keyProviderOptions.cryptography) && encryptionKey instanceof Uint8Array) {
+        const dataArr = new Uint8Array(data);
+        const cipher = dataArr.slice(0, dataArr.byteLength - SM4_TAG_LENGTH);
+        const tag = dataArr.slice(dataArr.byteLength - SM4_TAG_LENGTH);
+        // 认证失败（密钥错误 / 帧损坏）会在此抛出，落入下方 catch 触发 ratchet
+        const plainText = sm4GcmDecrypt(cipher, tag, encryptionKey, new Uint8Array(iv));
+        return {
+          payload: new Uint8Array(plainText),
+        };
+      }
       const plainText = await crypto.subtle.decrypt(
         {
           name: ENCRYPTION_ALGORITHM,
           iv,
         },
-        keySet.encryptionKey,
+        asCryptoKey(encryptionKey),
         new Uint8Array(data),
       );
       return {

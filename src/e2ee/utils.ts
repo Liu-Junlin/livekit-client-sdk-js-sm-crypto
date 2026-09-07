@@ -1,7 +1,8 @@
 import { type DataPacket, EncryptedPacketPayload } from '@livekit/protocol';
 import type { NonSharedUint8Array } from '../type-polyfills/non-shared-typed-arrays';
 import { ENCRYPTION_ALGORITHM } from './constants';
-import type { KeyProviderOptions } from './types';
+import { SM4_KEY_LENGTH, deriveSM4Key, ratchetSM4Key } from './sm/smCrypto';
+import type { Cryptography, EncryptionKey, KeyProviderOptions } from './types';
 
 export function isE2EESupported() {
   return isInsertableStreamSupported() || isScriptTransformSupported();
@@ -32,6 +33,7 @@ export async function importKey(
   algorithm: string | { name: string } = { name: ENCRYPTION_ALGORITHM },
   usage: 'derive' | 'encrypt' = 'encrypt',
 ) {
+  // 注意：国密（sm4）路径不使用 CryptoKey，不需要 importKey——密钥即字节本身。
   // https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/importKey
   return crypto.subtle.importKey(
     'raw',
@@ -42,7 +44,45 @@ export async function importKey(
   );
 }
 
-export async function createKeyMaterialFromString(password: string) {
+/** 判断给定 KeyProviderOptions 是否采用国密（SM4-GCM）。 */
+export function isSm4(cryptography: Cryptography | undefined): boolean {
+  return cryptography === 'sm4';
+}
+
+/**
+ * AES 路径的密钥收窄：确认 `key` 是 Web Crypto 的 `CryptoKey`。
+ * 仅在真正需要调用 `crypto.subtle`（AES-GCM）的代码点使用；国密分支请先用
+ * {@link isSm4} 分流，不要在此收窄后再判断字节。
+ */
+export function asCryptoKey(key: EncryptionKey): CryptoKey {
+  if (!isCryptoKeyLike(key)) {
+    throw new TypeError('expected a CryptoKey for the AES-GCM path, got raw bytes');
+  }
+  return key;
+}
+
+/** 轻量特征判断，避免在无 `CryptoKey` 全局的环境（单元测试）抛 ReferenceError。 */
+function isCryptoKeyLike(key: EncryptionKey): key is CryptoKey {
+  return (
+    !!key &&
+    typeof key === 'object' &&
+    typeof (key as CryptoKey).algorithm === 'object' &&
+    (key as CryptoKey).algorithm !== null
+  );
+}
+
+/**
+ * 会话密钥派生：从口令（SM3-hkdf）或随机种子（SM3-hkdf）派生密钥材料。
+ * AES 路径返回 Web Crypto CryptoKey；SM4 路径返回 16 字节 SM4 密钥材料。
+ */
+export async function createKeyMaterialFromString(
+  password: string,
+  cryptography: Cryptography = 'aes-gcm',
+): Promise<EncryptionKey> {
+  if (cryptography === 'sm4') {
+    // GM/T 场景无 PBKDF2；以口令为 IKM、固定盐做 SM3-hkdf，导出 16 字节主钥材料
+    return deriveSM4Key(password, 'LKFrameEncryptionKey', 'sm4-master', SM4_KEY_LENGTH);
+  }
   let enc = new TextEncoder();
 
   const keyMaterial = await crypto.subtle.importKey(
@@ -58,7 +98,13 @@ export async function createKeyMaterialFromString(password: string) {
   return keyMaterial;
 }
 
-export async function createKeyMaterialFromBuffer(cryptoBuffer: ArrayBuffer) {
+export async function createKeyMaterialFromBuffer(
+  cryptoBuffer: ArrayBuffer,
+  cryptography: Cryptography = 'aes-gcm',
+): Promise<EncryptionKey> {
+  if (cryptography === 'sm4') {
+    return deriveSM4Key(new Uint8Array(cryptoBuffer), 'LKFrameEncryptionKey', 'sm4-master', SM4_KEY_LENGTH);
+  }
   const keyMaterial = await crypto.subtle.importKey('raw', cryptoBuffer, 'HKDF', false, [
     'deriveBits',
     'deriveKey',
@@ -94,15 +140,30 @@ function getAlgoOptions(algorithmName: string, salt: string) {
 /**
  * Derives a set of keys from the master key.
  * See https://tools.ietf.org/html/draft-omara-sframe-00#section-4.3.1
+ *
+ * 国密分支：`cryptography === 'sm4'` 或用字节作为 material 时，用 SM3-hkdf
+ * 派生 16 字节 SM4 加密钥。
  */
-export async function deriveKeys(material: CryptoKey, options: KeyProviderOptions) {
-  const algorithmOptions = getAlgoOptions(material.algorithm.name, options.ratchetSalt);
+export async function deriveKeys(material: EncryptionKey, options: KeyProviderOptions) {
+  if (isSm4(options.cryptography) || material instanceof Uint8Array) {
+    const materialBytes =
+      material instanceof Uint8Array ? material : new Uint8Array(0);
+    const encryptionKey = deriveSM4Key(
+      materialBytes,
+      options.ratchetSalt,
+      'sm4-encryption',
+      SM4_KEY_LENGTH,
+    );
+    return { material: materialBytes, encryptionKey };
+  }
+  const aesMaterial = asCryptoKey(material);
+  const algorithmOptions = getAlgoOptions(aesMaterial.algorithm.name, options.ratchetSalt);
 
   // https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/deriveKey#HKDF
   // https://developer.mozilla.org/en-US/docs/Web/API/HkdfParams
   const encryptionKey = await crypto.subtle.deriveKey(
     algorithmOptions,
-    material,
+    aesMaterial,
     {
       name: ENCRYPTION_ALGORITHM,
       length: options.keySize,
@@ -111,7 +172,7 @@ export async function deriveKeys(material: CryptoKey, options: KeyProviderOption
     ['encrypt', 'decrypt'],
   );
 
-  return { material, encryptionKey };
+  return { material: aesMaterial, encryptionKey };
 }
 
 export function createE2EEKey(): NonSharedUint8Array {
@@ -121,12 +182,23 @@ export function createE2EEKey(): NonSharedUint8Array {
 /**
  * Ratchets a key. See
  * https://tools.ietf.org/html/draft-omara-sframe-00#section-4.3.5.1
+ *
+ * 国密分支：用 GM/T SM3-KDF 从链钥推进出 16 字节新链钥（返回其底层 ArrayBuffer，
+ * 便于作为 `RatchetResult.chainKey` 分发）。
  */
-export async function ratchet(material: CryptoKey, salt: string): Promise<ArrayBuffer> {
-  const algorithmOptions = getAlgoOptions(material.algorithm.name, salt);
+export async function ratchet(material: EncryptionKey, salt: string): Promise<ArrayBuffer> {
+  if (material instanceof Uint8Array) {
+    const next = ratchetSM4Key(material, salt);
+    return next.buffer.slice(
+      next.byteOffset,
+      next.byteOffset + next.byteLength,
+    ) as ArrayBuffer;
+  }
+  const aesMaterial = asCryptoKey(material);
+  const algorithmOptions = getAlgoOptions(aesMaterial.algorithm.name, salt);
 
   // https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/deriveBits
-  return crypto.subtle.deriveBits(algorithmOptions, material, 256);
+  return crypto.subtle.deriveBits(algorithmOptions, aesMaterial, 256);
 }
 
 export function needsRbspUnescaping(frameData: NonSharedUint8Array) {

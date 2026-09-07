@@ -15,20 +15,37 @@ import type { NonSharedUint8Array } from '../../type-polyfills/non-shared-typed-
 import { ENCRYPTION_ALGORITHM, IV_LENGTH, UNENCRYPTED_BYTES } from '../constants';
 import { CryptorError, CryptorErrorReason } from '../errors';
 import { type CryptorCallbacks, CryptorEvent } from '../events';
+import { SM4_TAG_LENGTH, sm4GcmDecrypt, sm4GcmEncrypt } from '../sm/smCrypto';
 import type {
   DecodeRatchetOptions,
+  EncryptionKey,
   KeyProviderOptions,
   KeySet,
   PTMetadataFromE2EEMessage,
   RatchetResult,
 } from '../types';
-import { deriveKeys, isVideoFrame, needsRbspUnescaping, parseRbsp, writeRbsp } from '../utils';
+import {
+  asCryptoKey,
+  deriveKeys,
+  isSm4,
+  isVideoFrame,
+  needsRbspUnescaping,
+  parseRbsp,
+  writeRbsp,
+} from '../utils';
 import { ErrorRateLimiter } from './ErrorRateLimiter';
 import type { ParticipantKeyHandler } from './ParticipantKeyHandler';
 import { processNALUsForEncryption } from './naluUtils';
 import { identifySifPayload } from './sifPayload';
 
 export const encryptionEnabledMap: Map<string, boolean> = new Map();
+
+/** 归一为 ArrayBuffer 承载的 `Uint8Array`（满足 `BufferSource.set` 的类型要求）。 */
+function abU8(a: Uint8Array): Uint8Array<ArrayBuffer> {
+  // 组帧时的 IV/帧尾/密文均来自本地 `new Uint8Array(...)`（ArrayBuffer 承载），
+  // SharedArrayBuffer 不会出现在媒体帧路径，这里仅做类型断言，不拷贝。
+  return a as Uint8Array<ArrayBuffer>;
+}
 
 export interface FrameCryptorConstructor {
   new (opts?: unknown): BaseFrameCryptor;
@@ -432,6 +449,74 @@ export class FrameCryptor extends BaseFrameCryptor {
   }
 
   /**
+   * 对帧负载做对称加密，返回 **`密文 ‖ 16 字节认证 tag`**（AEAD）的字节序列。
+   *
+   * 这样让上层组帧逻辑统一（长度 = 明文 + 16），与 AES-GCM 的 subtlecrypto
+   * 密文（tag 内嵌尾部）长度完全一致：
+   * - `aes-gcm`：`crypto.subtle.encrypt`，tag 已在密文内。
+   * - `sm4`：`sm4GcmEncrypt` 返回分离的 `{cipher, tag}`，在此拼接为 `cipher‖tag`。
+   *
+   * @param plain   要加密的负载字节
+   * @param key     当前 KeySet 的加密钥（AES 为 CryptoKey / SM4 为 16B 字节）
+   * @param iv      12 字节 IV
+   * @param aad     未加密帧头（作 GCM 附加认证数据）
+   */
+  private async encryptFramePayload(
+    plain: Uint8Array,
+    key: EncryptionKey,
+    iv: Uint8Array,
+    aad: Uint8Array,
+  ): Promise<Uint8Array<ArrayBuffer>> {
+    if (isSm4(this.keyProviderOptions.cryptography) && key instanceof Uint8Array) {
+      const { cipher, tag } = sm4GcmEncrypt(plain, key, iv, aad);
+      const out = new Uint8Array(cipher.byteLength + tag.byteLength);
+      out.set(cipher, 0);
+      out.set(tag, cipher.byteLength);
+      return abU8(out);
+    }
+    const cipherText = await crypto.subtle.encrypt(
+      {
+        name: ENCRYPTION_ALGORITHM,
+        iv: abU8(iv),
+        additionalData: abU8(aad),
+      },
+      asCryptoKey(key),
+      abU8(plain),
+    );
+    return abU8(new Uint8Array(cipherText));
+  }
+
+  /**
+   * 对称解密帧的**「密文 ‖ 16 字节认证 tag」**段，返回明文。
+   *
+   * 认证失败（key/iv/aad/密文任一不符）会抛出（SM4 为 `authentication tag
+   * mismatch`），由调用方捕获并触发 ratchet。与 {@link encryptFramePayload} 呼应：
+   * - `aes-gcm`：`crypto.subtle.decrypt`，整个密文序列一并传入。
+   * - `sm4`：从密文段尾部拆出 16B tag，再 `sm4GcmDecrypt`。
+   */
+  private async decryptFramePayload(
+    ciphertextWithTag: Uint8Array,
+    iv: Uint8Array,
+    key: EncryptionKey,
+    aad: Uint8Array,
+  ): Promise<ArrayBuffer | Uint8Array> {
+    if (isSm4(this.keyProviderOptions.cryptography) && key instanceof Uint8Array) {
+      const cipher = ciphertextWithTag.subarray(0, ciphertextWithTag.length - SM4_TAG_LENGTH);
+      const tag = ciphertextWithTag.subarray(ciphertextWithTag.length - SM4_TAG_LENGTH);
+      return sm4GcmDecrypt(cipher, tag, key, iv, aad);
+    }
+    return crypto.subtle.decrypt(
+      {
+        name: ENCRYPTION_ALGORITHM,
+        iv: abU8(iv),
+        additionalData: abU8(aad),
+      },
+      asCryptoKey(key),
+      abU8(ciphertextWithTag),
+    );
+  }
+
+  /**
    * Function that will be injected in a stream and will encrypt the given encoded frames.
    *
    * @param {RTCEncodedVideoFrame|RTCEncodedAudioFrame} encodedFrame - Encoded video frame.
@@ -506,22 +591,19 @@ export class FrameCryptor extends BaseFrameCryptor {
       // payload  |IV...(length = IV_LENGTH)|R|IV_LENGTH|KID |
       // ---------+-------------------------+-+---------+----
       try {
-        const cipherText = await crypto.subtle.encrypt(
-          {
-            name: ENCRYPTION_ALGORITHM,
-            iv,
-            additionalData: new Uint8Array(encodedFrame.data, 0, frameHeader.byteLength),
-          },
-          encryptionKey,
+        const cipherText = await this.encryptFramePayload(
           new Uint8Array(encodedFrame.data, frameInfo.unencryptedBytes),
+          encryptionKey,
+          new Uint8Array(iv),
+          new Uint8Array(encodedFrame.data, 0, frameHeader.byteLength),
         );
 
         let newDataWithoutHeader: NonSharedUint8Array = new Uint8Array(
           cipherText.byteLength + iv.byteLength + frameTrailer.byteLength,
         );
-        newDataWithoutHeader.set(new Uint8Array(cipherText)); // add ciphertext.
-        newDataWithoutHeader.set(new Uint8Array(iv), cipherText.byteLength); // append IV.
-        newDataWithoutHeader.set(frameTrailer, cipherText.byteLength + iv.byteLength); // append frame trailer.
+        newDataWithoutHeader.set(abU8(cipherText)); // add ciphertext (SM4 已含 16B tag，长度与 AES 对齐)。
+        newDataWithoutHeader.set(abU8(new Uint8Array(iv)), cipherText.byteLength); // append IV.
+        newDataWithoutHeader.set(abU8(frameTrailer), cipherText.byteLength + iv.byteLength); // append frame trailer.
 
         if (frameInfo.requiresNALUProcessing) {
           newDataWithoutHeader = writeRbsp(newDataWithoutHeader);
@@ -740,14 +822,11 @@ export class FrameCryptor extends BaseFrameCryptor {
         encodedFrame.data.byteLength -
         (frameHeader.byteLength + ivLength + frameTrailer.byteLength);
 
-      const plainText = await crypto.subtle.decrypt(
-        {
-          name: ENCRYPTION_ALGORITHM,
-          iv,
-          additionalData: new Uint8Array(encodedFrame.data, 0, frameHeader.byteLength),
-        },
-        ratchetOpts.encryptionKey ?? keySet!.encryptionKey,
+      const plainText = await this.decryptFramePayload(
         new Uint8Array(encodedFrame.data, cipherTextStart, cipherTextLength),
+        iv,
+        ratchetOpts.encryptionKey ?? keySet!.encryptionKey,
+        new Uint8Array(encodedFrame.data, 0, frameHeader.byteLength),
       );
 
       const newData = new ArrayBuffer(frameHeader.byteLength + plainText.byteLength);

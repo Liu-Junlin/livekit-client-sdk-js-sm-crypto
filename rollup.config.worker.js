@@ -11,6 +11,7 @@ export default {
       format: 'es',
       strict: true,
       sourcemap: true,
+      inlineDynamicImports: true,
     },
     {
       file: `dist/${packageJson.name}.e2ee.worker.js`,
@@ -18,6 +19,7 @@ export default {
       strict: true,
       sourcemap: true,
       name: kebabCaseToPascalCase(packageJson.name) + '.e2ee.worker',
+      inlineDynamicImports: true,
       plugins: [terser()],
     },
   ],

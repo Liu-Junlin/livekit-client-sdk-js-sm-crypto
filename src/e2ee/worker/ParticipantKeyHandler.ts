@@ -2,8 +2,14 @@ import { EventEmitter } from 'events';
 import type TypedEventEmitter from 'typed-emitter';
 import { workerLogger } from '../../logger';
 import { KeyHandlerEvent, type ParticipantKeyHandlerCallbacks } from '../events';
-import type { KeyProviderOptions, KeySet, RatchetResult } from '../types';
+import type { EncryptionKey, KeyProviderOptions, KeySet, RatchetResult } from '../types';
 import { deriveKeys, importKey, ratchet } from '../utils';
+
+function cryptoKeyUsage(material: EncryptionKey) {
+  return typeof (material as CryptoKey).algorithm === 'object'
+    ? { usage: (material as CryptoKey).usages, algorithm: (material as CryptoKey).algorithm }
+    : { usage: undefined, algorithm: 'SM4' };
+}
 
 // TODO ParticipantKeyHandlers currently don't get destroyed on participant disconnect
 // we could do this by having a separate worker message on participant disconnected.
@@ -128,7 +134,12 @@ export class ParticipantKeyHandler extends (EventEmitter as new () => TypedEvent
         }
         const currentMaterial = keySet.material;
         const chainKey = await ratchet(currentMaterial, this.keyProviderOptions.ratchetSalt);
-        const newMaterial = await importKey(chainKey, currentMaterial.algorithm.name, 'derive');
+        // 国密路径下当前材料即字节，链钥本身就是下一阶段密钥材料，无需（也不应）走
+        // Web Crypto importKey；AES 路径则导入为新的 CryptoKey。
+        const newMaterial: EncryptionKey =
+          currentMaterial instanceof Uint8Array
+            ? new Uint8Array(chainKey)
+            : await importKey(chainKey, currentMaterial.algorithm.name, 'derive');
         const ratchetResult: RatchetResult = {
           chainKey,
           cryptoKey: newMaterial,
@@ -154,7 +165,7 @@ export class ParticipantKeyHandler extends (EventEmitter as new () => TypedEvent
    * together with the material
    * also resets the valid key property and updates the currentKeyIndex
    */
-  async setKey(material: CryptoKey, keyIndex = 0, updateCurrentKeyIndex = true) {
+  async setKey(material: EncryptionKey, keyIndex = 0, updateCurrentKeyIndex = true) {
     await this.setKeyFromMaterial(material, keyIndex, null, updateCurrentKeyIndex);
     if (updateCurrentKeyIndex) {
       this.resetKeyStatus(keyIndex);
@@ -168,16 +179,17 @@ export class ParticipantKeyHandler extends (EventEmitter as new () => TypedEvent
    * also updates the currentKeyIndex
    */
   async setKeyFromMaterial(
-    material: CryptoKey,
+    material: EncryptionKey,
     keyIndex: number,
     ratchetedResult: RatchetResult | null = null,
     updateCurrentKeyIndex = true,
   ) {
     const keySet = await deriveKeys(material, this.keyProviderOptions);
     const newIndex = keyIndex >= 0 ? keyIndex % this.cryptoKeyRing.length : this.currentKeyIndex;
+    const logAttrs = cryptoKeyUsage(material);
     workerLogger.debug(`setting new key with index ${keyIndex}`, {
-      usage: material.usages,
-      algorithm: material.algorithm,
+      usage: logAttrs.usage,
+      algorithm: logAttrs.algorithm,
       ratchetSalt: this.keyProviderOptions.ratchetSalt,
     });
     this.setKeySet(keySet, newIndex, ratchetedResult);

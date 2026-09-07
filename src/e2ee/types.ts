@@ -24,7 +24,7 @@ export interface SetKeyMessage extends BaseMessage {
   data: {
     participantIdentity?: string;
     isPublisher: boolean;
-    key: CryptoKey;
+    key: EncryptionKey;
     keyIndex?: number;
     updateCurrentKeyIndex: boolean;
   };
@@ -213,13 +213,40 @@ export type E2EEWorkerMessage =
   | LogMessage
   | SetLogLevelMessage;
 
-export type KeySet = { material: CryptoKey; encryptionKey: CryptoKey };
+/**
+ * e2ee 使用的加密算法。
+ * - `'aes-gcm'`：默认，Web Crypto AES-GCM（行为与官方 SDK 一致）。
+ * - `'sm4'`：国密 SM4-GCM（AEAD，见 `src/e2ee/sm/smCrypto.ts`）。
+ */
+export type Cryptography = 'aes-gcm' | 'sm4';
+
+/**
+ * SM2 配置（仅在开启国密 / 启用 SM2 密钥协商或分发时使用）。
+ * 密钥均为 16 进制串。
+ */
+export type SM2Options = {
+  /** 本端 SM2 公钥；用于对分发来的会话钥信令验签等。 */
+  publicKey?: string;
+  /** 本端 SM2 私钥；用于解密被 SM2 加密保护的会话钥。 */
+  privateKey?: string;
+  /** SM2 密文结构：1 - C1C3C2（默认），0 - C1C2C3。 */
+  cipherMode?: 0 | 1;
+};
+
+/**
+ * 加密密钥形态。
+ * - `aes-gcm` 路径为 Web Crypto 的 `CryptoKey`；
+ * - `sm4` 路径为 16 字节 `Uint8Array`（SM4 密钥，sm-crypto-v3 直接使用字节）。
+ */
+export type EncryptionKey = CryptoKey | Uint8Array;
+
+export type KeySet = { material: EncryptionKey; encryptionKey: EncryptionKey };
 
 export type RatchetResult = {
   // The ratchet chain key, which is used to derive the next key.
   // Can be shared/exported to other participants.
   chainKey: ArrayBuffer;
-  cryptoKey: CryptoKey;
+  cryptoKey: EncryptionKey;
 };
 
 export type KeyProviderOptions = {
@@ -234,10 +261,17 @@ export type KeyProviderOptions = {
    * supported by non-web SDKs.
    */
   keySize: 128 | 256;
+  /**
+   * 使用的加密算法，默认 `'aes-gcm'`。置为 `'sm4'` 时媒体帧与数据消息
+   * 改用 SM4-GCM，会话密钥派生/换钥改用 SM3（见 `src/e2ee/sm/smCrypto.ts`）。
+   */
+  cryptography?: Cryptography;
+  /** 国密 SM2 密钥协商 / 分发配置（可选）。 */
+  sm2?: SM2Options;
 };
 
 export type KeyInfo = {
-  key: CryptoKey;
+  key: EncryptionKey;
   participantIdentity?: string;
   keyIndex?: number;
 };
@@ -258,7 +292,7 @@ export type DecodeRatchetOptions = {
   /** attempts  */
   ratchetCount: number;
   /** ratcheted key to try */
-  encryptionKey?: CryptoKey;
+  encryptionKey?: EncryptionKey;
 };
 
 export type ScriptTransformOptions = {

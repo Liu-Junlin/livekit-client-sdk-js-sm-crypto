@@ -3,7 +3,7 @@ import type TypedEventEmitter from 'typed-emitter';
 import log from '../logger';
 import { KEY_PROVIDER_DEFAULTS } from './constants';
 import { type KeyProviderCallbacks, KeyProviderEvent } from './events';
-import type { KeyInfo, KeyProviderOptions, RatchetResult } from './types';
+import type { EncryptionKey, KeyInfo, KeyProviderOptions, RatchetResult } from './types';
 import { createKeyMaterialFromBuffer, createKeyMaterialFromString } from './utils';
 
 /**
@@ -29,7 +29,11 @@ export class BaseKeyProvider extends (EventEmitter as new () => TypedEventEmitte
    * @param participantIdentity
    * @param keyIndex
    */
-  protected onSetEncryptionKey(key: CryptoKey, participantIdentity?: string, keyIndex?: number) {
+  protected onSetEncryptionKey(
+    key: EncryptionKey,
+    participantIdentity?: string,
+    keyIndex?: number,
+  ) {
     const keyInfo: KeyInfo = { key, participantIdentity, keyIndex };
     if (!this.options.sharedKey && !participantIdentity) {
       throw new Error(
@@ -107,10 +111,11 @@ export class ExternalE2EEKeyProvider extends BaseKeyProvider {
    * @param key
    */
   async setKey(key: string | ArrayBuffer) {
+    const cryptography = this.getOptions().cryptography ?? 'aes-gcm';
     const derivedKey =
       typeof key === 'string'
-        ? await createKeyMaterialFromString(key)
-        : await createKeyMaterialFromBuffer(key);
+        ? await createKeyMaterialFromString(key, cryptography)
+        : await createKeyMaterialFromBuffer(key, cryptography);
     this.onSetEncryptionKey(derivedKey);
   }
 }

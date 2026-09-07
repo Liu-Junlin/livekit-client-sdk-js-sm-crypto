@@ -9,6 +9,7 @@ import type {
   DecryptDataResponseMessage,
   E2EEWorkerMessage,
   EncryptDataResponseMessage,
+  EncryptionKey,
   ErrorMessage,
   InitAck,
   KeyProviderOptions,
@@ -348,7 +349,7 @@ function setEncryptionEnabled(enable: boolean, participantIdentity: string) {
   encryptionEnabledMap.set(participantIdentity, enable);
 }
 
-async function setSharedKey(key: CryptoKey, index?: number, updateCurrentKeyIndex?: boolean) {
+async function setSharedKey(key: EncryptionKey, index?: number, updateCurrentKeyIndex?: boolean) {
   workerLogger.info('set shared key', { index });
   await getSharedKeyHandler().setKey(key, index, updateCurrentKeyIndex);
 }
