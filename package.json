@@ -1,35 +1,34 @@
 {
   "name": "livekit-client-sm4",
   "version": "2.22.3",
-  "description": "JavaScript/TypeScript client SDK for LiveKit",
-  "main": "./dist/livekit-client.umd.js",
-  "unpkg": "./dist/livekit-client.umd.js",
-  "module": "./dist/livekit-client.esm.mjs",
+  "description": "JavaScript/TypeScript client SDK for LiveKit With SM4 Crypto",
+  "main": "./dist/livekit-client-sm4.umd.js",
+  "unpkg": "./dist/livekit-client-sm4.umd.js",
+  "module": "./dist/livekit-client-sm4.esm.mjs",
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
-      "import": "./dist/livekit-client.esm.mjs",
-      "require": "./dist/livekit-client.umd.js"
+      "import": "./dist/livekit-client-sm4.esm.mjs",
+      "require": "./dist/livekit-client-sm4.umd.js"
     },
     "./e2ee-worker": {
       "types": "./dist/src/e2ee/worker/e2ee.worker.d.ts",
-      "import": "./dist/livekit-client.e2ee.worker.mjs",
-      "require": "./dist/livekit-client.e2ee.worker.js"
+      "import": "./dist/livekit-client-sm4.e2ee.worker.mjs",
+      "require": "./dist/livekit-client-sm4.e2ee.worker.js"
     },
     "./packet-trailer-worker": {
       "types": "./dist/src/frameMetadata/worker/frameMetadata.worker.d.ts",
-      "import": "./dist/livekit-client.fm.worker.mjs",
-      "require": "./dist/livekit-client.fm.worker.js"
+      "import": "./dist/livekit-client-sm4.fm.worker.mjs",
+      "require": "./dist/livekit-client-sm4.fm.worker.js"
     },
     "./frame-metadata-worker": {
       "types": "./dist/src/frameMetadata/worker/frameMetadata.worker.d.ts",
-      "import": "./dist/livekit-client.fm.worker.mjs",
-      "require": "./dist/livekit-client.fm.worker.js"
+      "import": "./dist/livekit-client-sm4.fm.worker.mjs",
+      "require": "./dist/livekit-client-sm4.fm.worker.js"
     }
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
   "types": "dist/src/index.d.ts",
   "typesVersions": {
@@ -45,7 +44,7 @@
       ]
     }
   },
-  "repository": "git@github.com:livekit/client-sdk-js.git",
+  "repository": "git@github.com:Liu-Junlin/livekit-client-js-sm4.git",
   "author": "LiveKit <hello@livekit.io>",
   "license": "Apache-2.0",
   "scripts": {
@@ -68,7 +67,7 @@
     "type:check": "tsc --noEmit",
     "ci:publish": "pnpm type:check && pnpm build && pnpm compat && changeset publish",
     "downlevel-dts": "downlevel-dts ./dist/src ./dist/ts4.2 --to=4.2",
-    "compat": "eslint --config ./eslint.config.dist.mjs --no-inline-config  ./dist/livekit-client.esm.mjs",
+    "compat": "eslint --config ./eslint.config.dist.mjs --no-inline-config  ./dist/livekit-client-sm4.esm.mjs",
     "size-limit": "size-limit"
   },
   "dependencies": {
